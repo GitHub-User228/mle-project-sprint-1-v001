@@ -6,7 +6,7 @@
 
 Здесь укажите имя вашего бакета: s3-student-mle-20240730-73c4e0c760
 
-PS: Я привык оформлять оформлять код и комментарии полностью на английском языке, но если будет необходимость, то я могу сделать на русском.
+PS: Я привык оформлять код и комментарии полностью на английском языке, но если будет необходимость, то я могу сделать на русском.
 
 ## Airflow
 
@@ -32,5 +32,28 @@ There are also some utility functions stored in [utils.py](part1_airflow/plugins
 **[data_cleaning.ipynb](part1_airflow/notebooks/data_cleaning.ipynb)**: This Jupyter notebooks covers data cleaning part in details.
 
 PS: Unfortunately, the telegram callback plugin only works via `request` library, but not via `TelegramHook` for some unknown reason.
+
+## DVC
+
+### Project Structure
+
+**[params.yaml](part2_dvc/params.yaml)**: Parameters used in the dvc pipeline.
+
+**[dvc.yaml](part2_dvc/dvc.yaml)**: Defines the dvc pipeline.
+
+**[dvc.lock](part2_dvc/dvc.lock)**: Contains the data about the state of the dvc pipeline.
+
+**[scripts](part2_dvc/scripts)**: This directory contains Python scripts for the dvc pipeline. It includes:
+- data loading: [data.py](part2_dvc/scripts/data.py)
+- pipeline fitting: [fit.py](part2_dvc/scripts/fit.py)
+- pipeline evaluation: [evaluate.py](part2_dvc/scripts/evaluate.py)
+- custom metrics: [metrics.py](part2_dvc/scripts/metrics.py)
+- utilities: [utils.py](part2_dvc/scripts/utils.py)
+
+The baseline model showed the following scores:
+- RMSE: 4758653.105
+- MAE: 2297740.069
+- MAPE: 0.149
+- R2: 0.857
 
 
