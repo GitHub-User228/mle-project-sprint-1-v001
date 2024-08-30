@@ -46,7 +46,7 @@ def fit_model() -> None:
                 OneHotEncoder(drop=params["one_hot_drop"]),
                 binary_cat_features,
             ),
-            ("num", StandardScaler(), numerical_features),
+            ("num", "passthrough", numerical_features),
             (
                 "non-binary",
                 CatBoostEncoder(cols=non_binary_cat_features),

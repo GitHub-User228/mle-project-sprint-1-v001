@@ -1,20 +1,49 @@
 from math import log10
 
 import pandas as pd
-from sqlalchemy import (
-    inspect,
-    MetaData,
-    Table,
-    Column,
-    Boolean,
-    Integer,
-    Float,
-    UniqueConstraint,
-)
+from ensure import ensure_annotations
 from sklearn.ensemble import IsolationForest
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 
+def extract(**kwargs):
+    """
+    Extracts data from the destination db via PostgresHook, and
+    pushes the data to the next task.
+
+    Args:
+        **kwargs (dict):
+            A dictionary of keyword arguments, including the task
+            instance (ti).
+
+    Raises:
+        Exception:
+            If an exception occurs during data extraction.
+    """
+
+    try:
+        # 1. Connect to the destination db using PostgresHook.
+        hook = PostgresHook("destination_db")
+        conn = hook.get_conn()
+
+        # 2. Get the data from the destination database
+        data = pd.read_sql("SELECT * FROM prepared_flats", conn)
+
+        # 3. Close the connection to the destination database
+        conn.close()
+
+        # 4. Drop the unnecessary 'id' columns
+        data.drop(columns=["id"], inplace=True)
+
+        # 5. Pushing the merged dataframe to the next task
+        ti = kwargs["ti"]
+        ti.xcom_push("extracted_data", data)
+
+    except Exception as e:
+        raise Exception(f"An exception occurred during extraction") from e
+
+
+@ensure_annotations
 def remove_duplicates(data: pd.DataFrame) -> pd.DataFrame:
     """
     Removes duplicate rows from the input DataFrame based on
@@ -38,9 +67,10 @@ def remove_duplicates(data: pd.DataFrame) -> pd.DataFrame:
     return data
 
 
+@ensure_annotations
 def iqr_filter(
     data: pd.DataFrame,
-    features: dict[str],
+    features: dict,
     verbose: bool = True,
 ) -> pd.DataFrame:
     """
@@ -51,7 +81,7 @@ def iqr_filter(
     Args:
         data (pd.DataFrame):
             The input DataFrame to filter.
-        features (dict[str]):
+        features (dict[str, int | float]):
             Dictionary of feature names and their corresponding
             threshold values for the IQR filter.
         verbose (bool):
@@ -62,7 +92,18 @@ def iqr_filter(
     Returns:
         pd.DataFrame:
             The input DataFrame without outliers.
+
+    Raises:
+        ValueError:
+            If the features dictionary does not match the
+            expected format.
     """
+
+    if not all(isinstance(v, (int, float)) for v in features.values()):
+        raise ValueError("All values in features dict must be numeric.")
+    if not all(isinstance(k, str) for k in features.keys()):
+        raise ValueError("All keys in features dict must be strings.")
+
     len_old = len(data)
     mask = pd.Series(True, index=data.index)
     for feature, threshold in features.items():
@@ -83,103 +124,31 @@ def iqr_filter(
     return data
 
 
-def create_table(**kwargs):
+@ensure_annotations
+def clean(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
     """
-    Creates a SQLAlchemy table named "cleaned_flats" with the
-    specified columns, if the table does not already exist in
-    the destination database.
-
-    The table also has a unique constraint on the "flat_id" column.
-    """
-
-    hook = PostgresHook("destination_db")
-    conn = hook.get_sqlalchemy_engine()
-    metadata = MetaData()
-
-    table = Table(
-        "cleaned_flats",
-        metadata,
-        Column("id", Integer, primary_key=True, autoincrement=True),
-        Column("flat_id", Integer),
-        Column("floor", Integer),
-        Column("is_apartment", Boolean),
-        Column("kitchen_area", Float),
-        Column("living_area", Float),
-        Column("rooms", Integer),
-        Column("total_area", Float),
-        Column("log1p_target", Float),
-        Column("building_id", Integer),
-        Column("build_year", Integer),
-        Column("building_type_int", Integer),
-        Column("latitude", Float),
-        Column("longitude", Float),
-        Column("ceiling_height", Float),
-        Column("flats_count", Integer),
-        Column("floors_total", Integer),
-        Column("has_elevator", Boolean),
-        Column("is_duplicated", Boolean),
-        UniqueConstraint("flat_id", name="unique_flat_id_constraint_2"),
-    )
-
-    if not inspect(conn).has_table(table.name):
-        metadata.create_all(conn)
-
-
-def extract(**kwargs):
-    """
-    Extracts data from the destination db via PostgresHook, and
-    pushes the data to the next task.
-
-    Args:
-        **kwargs (dict):
-            A dictionary of keyword arguments, including the task
-            instance (ti).
-    """
-
-    # 1. Connect to the destination db using PostgresHook.
-    hook = PostgresHook("destination_db")
-    conn = hook.get_conn()
-
-    # 2. Get the data from the destination database
-    data = pd.read_sql("SELECT * FROM prepared_flats", conn)
-
-    # 3. Close the connection to the destination database
-    conn.close()
-
-    # 4. Drop the unnecessary 'id' columns
-    data.drop(columns=["id"], inplace=True)
-
-    # 5. Pushing the merged dataframe to the next task
-    ti = kwargs["ti"]
-    ti.xcom_push("extracted_data", data)
-
-
-def transform(**kwargs):
-    """
-    Transforms the extracted data by dealing with duplicates, missing
+    Cleans data by dealing with duplicates, missing
     data and outliers. Also creates a new target column.
-    Finally, pushes the transformed data to  the next task.
 
     Args:
-        **kwargs (dict):
-            A dictionary of keyword arguments, including the task
-            instance (ti).
+        data (pd.DataFrame):
+            The input data
+
+    Returns:
+        pd.DataFrame:
+            The transformed data
     """
 
-    # 1. Get the extracted data
-    ti = kwargs["ti"]
-    data = ti.xcom_pull(task_ids="extract", key="extracted_data")
-
-    # 2. Removing duplicates
+    # 1. Removing duplicates
     data = remove_duplicates(data)
 
-    # 3. Removing rows with missing data
+    # 2. Removing rows with missing data
     data.dropna(axis=0, inplace=True)
 
-    # 4. Creating a new target column
+    # 3. Creating a new target column
     data["log1p_target"] = data["target"].apply(lambda x: log10(1 + x))
 
-    # 5. Omitting outliers
+    # 4. Omitting outliers
 
     ## One-dimensional outliers
     for query in [
@@ -235,31 +204,4 @@ def transform(**kwargs):
     # 6. Removing unnessesary columns
     data.drop(columns=["studio", "target", "outlier"], inplace=True)
 
-    # 7. Pushing the transformed data to the next task
-    ti.xcom_push("transformed_data", data)
-
-
-def load(**kwargs):
-    """
-    Loads the transformed data into the destination database using
-    a PostgresHook.
-
-    Args:
-        **kwargs (dict):
-            A dictionary of keyword arguments, including the task
-            instance (ti).
-    """
-
-    # 1. Get the transformed data
-    ti = kwargs["ti"]
-    data = ti.xcom_pull(task_ids="transform", key="transformed_data")
-
-    # 2. Load the data into the destination database via PostgresHook
-    hook = PostgresHook("destination_db")
-    hook.insert_rows(
-        table="cleaned_flats",
-        replace=True,
-        target_fields=data.columns.tolist(),
-        replace_index=["flat_id"],
-        rows=data.values.tolist(),
-    )
+    return data
